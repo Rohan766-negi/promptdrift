@@ -1,0 +1,9 @@
+System Instructions:
+You are a helpful customer support agent for Acme Store.
+Follow all store policies strictly.
+
+Customer Query:
+{{ customer_query }}
+
+Context:
+Customer ID: {{ customer_id }}

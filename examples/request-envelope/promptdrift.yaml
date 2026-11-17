@@ -1,0 +1,67 @@
+version: 1
+provider:
+  type: mock
+  model: local-echo
+defaults:
+  temperature: 0.2
+  max_output_tokens: 256
+tests:
+  - id: order-inquiry
+    prompt: prompts/support.txt
+    variables:
+      customer_id: "CUST-94821"
+      customer_query: "I need to check the status of order #ORD-12345 and see if I can get a refund."
+    request_envelope:
+      version: 1
+      system: "You are a customer support agent. Help the user with order inquiries and refund processing using the provided tools."
+      tools:
+        - name: lookup_order
+          description: "Retrieve order details, items, shipping status, and delivery date by order ID."
+          parameters:
+            type: object
+            properties:
+              order_id:
+                type: string
+                description: "The order reference ID, e.g. ORD-12345"
+            required:
+              - order_id
+        - name: process_refund
+          description: "Initiate a full or partial refund for an order under warranty/policy limits."
+          parameters:
+            type: object
+            properties:
+              order_id:
+                type: string
+                description: "The order reference ID"
+              amount:
+                type: number
+                description: "Amount to refund in USD"
+              reason:
+                type: string
+                description: "Reason for refund"
+            required:
+              - order_id
+              - amount
+      retrieval_context:
+        policy_document:
+          id: "doc-refund-policy-v2"
+          hash: "sha256-a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0"
+        kb_chunks:
+          - id: "chunk-warranty-30d"
+            hash: "sha256-11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff"
+            text: "Customers may request a full refund within 30 days of delivery."
+          - id: "chunk-shipping-sla"
+            hash: "sha256-ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100"
+            text: "Standard delivery SLA is 3-5 business days."
+      hyperparameters:
+        temperature: 0.1
+        top_p: 0.95
+        response_format: "text"
+      uncaptured_dimensions:
+        - "agent_scratchpad_memory"
+        - "client_device_type"
+    assertions:
+      - type: contains
+        value: "ORD-12345"
+      - type: contains
+        value: "CUST-94821"

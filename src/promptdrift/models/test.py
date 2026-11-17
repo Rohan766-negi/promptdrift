@@ -139,15 +139,29 @@ class RequestEnvelope(BaseModel):
     """Declared request context for provenance only; it is never sent to a provider."""
 
     model_config = ConfigDict(extra="forbid")
+    version: int = Field(default=1, ge=1)
     system: str | None = None
     tools: list[ToolSchema] = Field(default_factory=list)
     retrieval_context: dict[str, Any] = Field(default_factory=dict)
+    hyperparameters: dict[str, Any] = Field(default_factory=dict)
+    uncaptured_dimensions: list[str] | dict[str, Any] = Field(default_factory=list)
+
+    # Top-level shorthand fields (synced into hyperparameters)
+    temperature: float | None = None
+    top_p: float | None = None
+    response_format: str | dict[str, Any] | None = None
 
     @model_validator(mode="after")
-    def reject_duplicate_tools(self) -> RequestEnvelope:
+    def validate_envelope(self) -> RequestEnvelope:
         names = [tool.name for tool in self.tools]
         if len(names) != len(set(names)):
             raise ValueError("request_envelope tool names must be unique")
+        if self.temperature is not None and "temperature" not in self.hyperparameters:
+            self.hyperparameters["temperature"] = self.temperature
+        if self.top_p is not None and "top_p" not in self.hyperparameters:
+            self.hyperparameters["top_p"] = self.top_p
+        if self.response_format is not None and "response_format" not in self.hyperparameters:
+            self.hyperparameters["response_format"] = self.response_format
         return self
 
 

@@ -11,7 +11,7 @@ import hashlib
 from pathlib import Path
 
 from promptdrift.engine.baseline import load_baseline
-from promptdrift.engine.provenance import ENVELOPE_COMPONENTS, fingerprint, with_response
+from promptdrift.engine.provenance import ENVELOPE_COMPONENTS, digest, fingerprint, with_response
 from promptdrift.engine.runner import evaluate_response, evaluation_status
 from promptdrift.engine.suite import resolve_suite
 from promptdrift.errors import ConfigError, ProviderBudgetExceededError, ProviderError
@@ -62,7 +62,12 @@ def _diagnose(
             )
         elif before is not None and after is not None:
             for component in ENVELOPE_COMPONENTS:
-                if before.get(component) != after.get(component):
+                b_val = before.get(component)
+                a_val = after.get(component)
+                if b_val != a_val:
+                    # Backward compatibility: legacy baseline didn't record hyperparameters
+                    if component == "hyperparameters" and b_val is None and a_val == digest({}):
+                        continue
                     changed_fields.append("prompt_changed")
                     evidence.append(
                         f"request_envelope.{component} differs from the accepted baseline."
