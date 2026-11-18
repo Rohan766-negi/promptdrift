@@ -45,6 +45,7 @@ tests:
   - id: refund-policy
     prompt: prompts/support.txt
     request_envelope:
+      version: 1
       system: You are a support agent.
       tools:
         - name: lookup_order
@@ -52,11 +53,17 @@ tests:
           parameters: {type: object, properties: {order_id: {type: string}}}
       retrieval_context:
         policy: {refund_days: 30}
+      hyperparameters:
+        temperature: 0.2
+      uncaptured_dimensions:
+        - session_history
 ```
 
-- `provenance.envelope_hashes` stores one SHA-256 per component: `system`, `tools` and `retrieval_context`. The template itself stays in `input_hash`, so it is never hashed twice.
+- `provenance.envelope_hashes` stores one SHA-256 per component: `system`, `tools`, `retrieval_context`, and `hyperparameters`. The template itself stays in `input_hash`, so it is never hashed twice.
 - Mapping key order does not matter. Tool names must be unique, and tools are hashed in name order, so reordering tools does not change the hash. Lists inside a tool's `parameters` (such as `required` or `enum`) keep their declared order.
-- Before hashing, scalar values under credential-named keys are removed at any depth (`api_key`, `x-api-key`, `token`, `access_token`, `refresh_token`, `session_token`, `secret`, `client_secret`, `password`, `private_key`, `authorization`, `credential(s)`, `cookie`, `set-cookie`). Matching ignores case, `-` and `_`, and is exact, so `max_tokens` is kept. Object values are kept, so a tool parameter schema named `password` still counts. Long `sk-…` and `Bearer …` strings are masked. Do not store real credentials in configuration regardless.
+- Top-level shorthand fields (`temperature`, `top_p`, `response_format`) sync into `hyperparameters` automatically.
+- `uncaptured_dimensions` declares external context dimensions not tracked by the envelope.
+- Before hashing, scalar values under credential-named keys are removed at any depth (`api_key`, `x-api-key`, `token`, `access_token`, `refresh_token`, `session_token`, `secret`, `client_secret`, `password`, `private_key`, `authorization`, `credential(s)`, `cookie`, `set-cookie`, `auth_token`, `api_secret`, `access_key`, `client_key`). Matching ignores case, `-` and `_`, and is exact, so `max_tokens` is kept. Object values are kept, so a tool parameter schema named `password` still counts. Token strings (`sk-…` and `Bearer …` of 16+ characters) are masked. Do not store real credentials in configuration regardless.
 - Cases without an envelope omit `envelope_hashes` entirely; their baselines are unchanged and existing v1–v3 baselines load as before. Promoted scenarios (`scenarios.json`) cannot declare an envelope yet.
 
 ## Selective acceptance

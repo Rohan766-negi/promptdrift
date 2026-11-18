@@ -51,7 +51,7 @@ Each schema-v3 baseline case records:
 | `contract_hash` | Ordered assertions, severities/names, thresholds and output-format contract |
 | `engine_version` | PromptDrift version used for the observation |
 | Optional response hashes | Provider-returned resolved model ID/system fingerprint, when available |
-| Optional `envelope_hashes` | One hash each for the declared [request envelope](baselines.md#request-envelopes) `system`, `tools` (in name order) and `retrieval_context`, after credential stripping |
+| Optional `envelope_hashes` | One hash each for the declared [request envelope](baselines.md#request-envelopes) `system`, `tools` (in name order), `retrieval_context`, and `hyperparameters`, after credential stripping |
 
 JSON is canonicalized before hashing. Moving a project or reordering mapping keys does not by itself change these fingerprints. Whitespace changes to the rendered request do. API-key rotation under an otherwise equivalent endpoint is not considered a configuration change; different routing attached to credentials remains **unobserved context**.
 

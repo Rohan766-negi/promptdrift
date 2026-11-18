@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `history`: bounded project-local monitoring history; `demo`: a temporary loopback-only synthetic drift incident through the real adapter.
 - Opt-in Action monitor mode and deduplicated scheduled/manual GitHub failure issues; synthetic and real-provider monitoring examples.
 - Source-linked ecosystem comparison and documented attribution/privacy limits.
-- Optional per-test `request_envelope` (system message, tool schemas, static retrieval context) with credential-stripped, per-component provenance hashes; monitoring evidence names the drifted component.
+- Optional per-test `request_envelope` (system instructions, tool schemas, retrieval context, hyperparameters, and uncaptured dimensions) with credential-stripped, per-component provenance hashes, composite provenance fingerprinting, and component-level drift attribution (#53).
 - Anthropic provider (`type: anthropic`): Messages API adapter with optional `system` prompt, 429/529 mapped to rate limits, safe error messages, and offline fixtures.
 - `contains_all` and `contains_any` assertions that take a list of substrings (#61).
 

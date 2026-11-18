@@ -13,7 +13,7 @@ from promptdrift.models.provenance import Provenance
 from promptdrift.models.result import ModelResponse
 from promptdrift.models.test import RequestEnvelope
 
-ENVELOPE_COMPONENTS = ("system", "tools", "retrieval_context")
+ENVELOPE_COMPONENTS = ("system", "tools", "retrieval_context", "hyperparameters")
 # Exact matches after lowercasing and removing "-"/"_"; substrings would catch e.g. max_tokens.
 CREDENTIAL_KEYS = frozenset(
     {
@@ -32,10 +32,16 @@ CREDENTIAL_KEYS = frozenset(
         "credentials",
         "cookie",
         "setcookie",
+        "authtoken",
+        "apisecret",
+        "accesskey",
+        "clientkey",
     }
 )
 # Word-bounded and long, so ordinary text such as "risk-assessment" is never altered.
-CREDENTIAL_VALUE_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]{20,}|\bBearer\s+\S{20,}")
+CREDENTIAL_VALUE_PATTERN = re.compile(
+    r"\bsk-[A-Za-z0-9_-]{16,}|\bBearer\s+\S{16,}", re.IGNORECASE
+)
 
 
 def digest(value: Any) -> str:
@@ -67,6 +73,32 @@ def envelope_hashes(envelope: RequestEnvelope | None) -> dict[str, str] | None:
     # Names are unique, so name order is unambiguous; lists inside parameters keep their order.
     data["tools"] = sorted(data["tools"], key=lambda tool: tool["name"])
     return {component: digest(data[component]) for component in ENVELOPE_COMPONENTS}
+
+
+def composite_provenance_fingerprint(
+    prompt: str,
+    variables: dict[str, Any] | None = None,
+    envelope: RequestEnvelope | None = None,
+) -> str:
+    """Combine rendered prompt, stripped variables, and request envelope into a composite fingerprint."""
+    env_data = None
+    if envelope is not None:
+        uncaptured = envelope.uncaptured_dimensions
+        if isinstance(uncaptured, list) and all(isinstance(x, str) for x in uncaptured):
+            normalized_uncaptured = sorted(uncaptured)
+        else:
+            normalized_uncaptured = uncaptured
+        env_data = {
+            "version": envelope.version,
+            "hashes": envelope_hashes(envelope),
+            "uncaptured_dimensions": normalized_uncaptured,
+        }
+    payload = {
+        "prompt_hash": digest(prompt),
+        "variables": strip_credentials(variables or {}),
+        "envelope": env_data,
+    }
+    return digest(payload)
 
 
 def fingerprint(config: Config, test: TestCase, prompt: str) -> Provenance:

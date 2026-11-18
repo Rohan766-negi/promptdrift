@@ -9,10 +9,17 @@ from pydantic import ValidationError
 
 from promptdrift.engine.baseline import load_baseline, write_baseline
 from promptdrift.engine.monitor import monitor_suite
-from promptdrift.engine.provenance import envelope_hashes, fingerprint, strip_credentials
+from promptdrift.engine.provenance import (
+    composite_provenance_fingerprint,
+    envelope_hashes,
+    fingerprint,
+    strip_credentials,
+)
 from promptdrift.engine.runner import run_suite
 from promptdrift.models import Config
+from promptdrift.models.result import ModelResponse
 from promptdrift.models.test import RequestEnvelope
+from promptdrift.providers.mock import MockProvider
 
 
 def envelope(**overrides):
@@ -85,6 +92,7 @@ def test_hashes_ignore_key_order_including_nested():
         ("system", "You are a billing agent."),
         ("tools", [{"name": "lookup_order", "description": "Find an order."}]),
         ("retrieval_context", {"policy": {"refund_days": 14, "region": "EU"}, "faq": ["a", "b"]}),
+        ("hyperparameters", {"temperature": 0.2}),
     ],
 )
 def test_each_component_changes_only_its_own_hash(component, value):
@@ -114,7 +122,23 @@ def test_credentials_do_not_affect_hashes():
 
 
 @pytest.mark.parametrize(
-    "key", ["password", "privateKey", "refresh_token", "session-token", "cookie", "Set-Cookie"]
+    "key",
+    [
+        "password",
+        "privateKey",
+        "refresh_token",
+        "session-token",
+        "cookie",
+        "Set-Cookie",
+        "auth_token",
+        "authToken",
+        "api-secret",
+        "apiSecret",
+        "access_key",
+        "accessKey",
+        "client_key",
+        "clientKey",
+    ],
 )
 def test_sensitive_keys_are_removed_case_and_separator_insensitively(key):
     assert strip_credentials({key: "value", "kept": 1}) == {"kept": 1}
@@ -245,3 +269,158 @@ def test_adding_an_envelope_after_baselining_is_reported(tmp_path):
     case = monitor_suite(config, path, samples=2).tests[0]
     assert case.diagnosis == "prompt_changed"
     assert "request_envelope was added since the accepted baseline." in case.evidence
+
+
+def test_default_envelope_construction():
+    env = RequestEnvelope()
+    assert env.version == 1
+    assert env.system is None
+    assert env.tools == []
+    assert env.retrieval_context == {}
+    assert env.hyperparameters == {}
+    assert env.uncaptured_dimensions == []
+    assert env.temperature is None
+    assert env.top_p is None
+    assert env.response_format is None
+
+    # Version must be >= 1
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        RequestEnvelope(version=0)
+
+    # Extra fields forbidden
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        RequestEnvelope(extra_field="invalid")
+
+
+def test_shorthand_hyperparameters_sync():
+    env = RequestEnvelope(temperature=0.7, top_p=0.9, response_format="json_object")
+    assert env.hyperparameters == {
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "response_format": "json_object",
+    }
+
+    # Explicit hyperparameters are not overwritten by shorthand
+    env2 = RequestEnvelope(temperature=0.7, hyperparameters={"temperature": 0.5})
+    assert env2.hyperparameters["temperature"] == 0.5
+
+
+def test_uncaptured_dimensions_handling():
+    env_list = RequestEnvelope(uncaptured_dimensions=["user_locale", "session_id"])
+    assert env_list.uncaptured_dimensions == ["user_locale", "session_id"]
+    env_dict = RequestEnvelope(uncaptured_dimensions={"user_locale": "en_US"})
+    assert env_dict.uncaptured_dimensions == {"user_locale": "en_US"}
+
+
+def test_token_redaction_regex_case_and_length():
+    # >= 16 chars sk- and Bearer tokens are redacted
+    assert strip_credentials("sk-1234567890abcdef") == "[REDACTED]"
+    assert strip_credentials("bearer 1234567890abcdef") == "[REDACTED]"
+    assert strip_credentials("BEARER 1234567890abcdef") == "[REDACTED]"
+    # Shorter strings are not matched
+    assert strip_credentials("sk-short") == "sk-short"
+    assert strip_credentials("Bearer short") == "Bearer short"
+
+
+def test_composite_provenance_fingerprint_determinism():
+    env1 = envelope()
+    env2 = RequestEnvelope.model_validate(
+        {
+            "tools": list(reversed(env1.tools)),
+            "system": env1.system,
+            "retrieval_context": env1.retrieval_context,
+            "hyperparameters": env1.hyperparameters,
+            "uncaptured_dimensions": ["beta", "alpha"],
+        }
+    )
+    env1_with_dims = env1.model_copy(update={"uncaptured_dimensions": ["alpha", "beta"]})
+
+    fp1 = composite_provenance_fingerprint("Prompt text", {"var": 1}, env1_with_dims)
+    fp2 = composite_provenance_fingerprint("Prompt text", {"var": 1}, env2)
+    # Permuting tool order and uncaptured_dimensions produces identical composite fingerprint
+    assert fp1 == fp2
+    assert len(fp1) == 64
+
+    # Changing prompt changes composite fingerprint
+    assert composite_provenance_fingerprint("Other text", {"var": 1}, env1) != fp1
+    # Changing variables changes composite fingerprint
+    assert composite_provenance_fingerprint("Prompt text", {"var": 2}, env1) != fp1
+    # Redacted credentials in variables do not change composite fingerprint
+    fp_creds1 = composite_provenance_fingerprint("Prompt text", {"api_key": "secret1", "var": 1}, env1)
+    fp_creds2 = composite_provenance_fingerprint("Prompt text", {"api_key": "secret2", "var": 1}, env1)
+    assert fp_creds1 == fp_creds2
+    # Without envelope works cleanly
+    fp_no_env = composite_provenance_fingerprint("Prompt text", {"var": 1})
+    assert len(fp_no_env) == 64
+    assert fp_no_env != fp1
+
+
+def test_provenance_composite_fingerprint_and_hash_properties(tmp_path):
+    config, path = configured(tmp_path, envelope().model_dump(mode="json"))
+    prov = fingerprint(config, config.tests[0], "Refunds: 30 days")
+    assert prov.composite_fingerprint == prov.composite_hash
+    assert len(prov.composite_fingerprint) == 64
+
+    # Different prompt changes input_hash and composite_fingerprint
+    prov2 = fingerprint(config, config.tests[0], "Different prompt")
+    assert prov.composite_fingerprint != prov2.composite_fingerprint
+
+    # Property is excluded from serialized json (preserves byte-identical baseline)
+    serialized = json.loads(prov.model_dump_json())
+    assert "composite_fingerprint" not in serialized
+    assert "composite_hash" not in serialized
+
+
+def test_legacy_baseline_without_hyperparameters_compatibility(tmp_path):
+    config, path = configured(tmp_path, envelope().model_dump(mode="json"))
+    report = run_suite(config, path)
+    # Simulate legacy baseline created without hyperparameters hash
+    legacy_hashes = {k: v for k, v in report.tests[0].provenance.envelope_hashes.items() if k != "hyperparameters"}
+    report.tests[0].provenance.envelope_hashes = legacy_hashes
+    baseline_path = tmp_path / config.baseline.path
+    write_baseline(baseline_path, report)
+
+    # Monitoring with current code does not falsely attribute drift
+    case = monitor_suite(config, path, samples=2).tests[0]
+    assert case.diagnosis == "stable"
+    assert not any("hyperparameters" in item for item in case.evidence)
+
+
+def test_envelope_removed_after_baselining_is_reported(tmp_path):
+    config, path = configured(tmp_path, envelope().model_dump(mode="json"))
+    write_baseline(tmp_path / config.baseline.path, run_suite(config, path))
+    config.tests[0].request_envelope = None
+    case = monitor_suite(config, path, samples=2).tests[0]
+    assert case.diagnosis == "prompt_changed"
+    assert "request_envelope was removed since the accepted baseline." in case.evidence
+
+
+def test_monitor_hyperparameters_drift_reported(tmp_path):
+    config, path = configured(
+        tmp_path,
+        envelope(hyperparameters={"temperature": 0.2}).model_dump(mode="json"),
+    )
+    write_baseline(tmp_path / config.baseline.path, run_suite(config, path))
+    config.tests[0].request_envelope = envelope(hyperparameters={"temperature": 0.8})
+    case = monitor_suite(config, path, samples=2).tests[0]
+    assert case.diagnosis == "prompt_changed"
+    assert "request_envelope.hyperparameters differs from the accepted baseline." in case.evidence
+
+
+def test_observed_model_drift_with_envelope(tmp_path, monkeypatch):
+    config, path = configured(tmp_path, envelope().model_dump(mode="json"))
+    write_baseline(tmp_path / config.baseline.path, run_suite(config, path))
+
+    # Provenance (prompt, settings, contracts, envelope) remains identical,
+    # but model repeatedly returns failing output across probes.
+    def mock_failing_complete(self, prompt, **kwargs):
+        return ModelResponse(
+            output="No refund under any circumstances.",
+            latency_ms=1.0,
+            model="echo",
+            provider="mock",
+        )
+
+    monkeypatch.setattr(MockProvider, "complete", mock_failing_complete)
+    case = monitor_suite(config, path, samples=2).tests[0]
+    assert case.diagnosis == "observed_model_drift"
